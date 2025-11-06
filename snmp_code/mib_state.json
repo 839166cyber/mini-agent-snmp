@@ -1,4 +1,6 @@
 {
-  "cpuUsage": 25,
+  "manager": "lab-manager-01",
+  "managerEmail": "monitor@example.com",
+  "cpuUsage": 10,
   "cpuThreshold": 80
 }
