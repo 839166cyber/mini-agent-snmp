@@ -1,6 +1,37 @@
 {
-  "manager": "lab-manager-01",
-  "managerEmail": "monitor@example.com",
-  "cpuUsage": 10,
-  "cpuThreshold": 80
+  "baseoid": "1.3.6.1.4.1.28308.1.1",
+  "scalars": {
+    "manager": {
+      "oid": "1.3.6.1.4.1.28308.1.1.1",
+      "type": "DisplayString",
+      "access": "read-write",
+      "minlen": 1,
+      "maxlen": 255,
+      "value": "Nombre del manager"
+    },
+    "managerEmail": {
+      "oid": "1.3.6.1.4.1.28308.1.1.2",
+      "type": "DisplayString",
+      "access": "read-write",
+      "minlen": 3,
+      "maxlen": 255,
+      "value": "839166@unizar.es"
+    },
+    "cpuUsage": {
+      "oid": "1.3.6.1.4.1.28308.1.1.3",
+      "type": "Integer32",
+      "access": "read-only",
+      "min": 0,
+      "max": 100,
+      "value": 0
+    },
+    "cpuThreshold": {
+      "oid": "1.3.6.1.4.1.28308.1.1.4",
+      "type": "Integer32",
+      "access": "read-write",
+      "min": 0,
+      "max": 100,
+      "value": 55
+    }
+  }
 }
