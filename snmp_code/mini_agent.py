@@ -1,5 +1,3 @@
-# mini_agent.py
-
 import json
 from pysnmp.entity.engine import SnmpEngine
 from pysnmp.entity import config
@@ -8,14 +6,14 @@ from pysnmp.proto.rfc1902 import NoSuchObject, EndOfMibView, OctetString, Intege
 from pysnmp.proto.api import v2c
 from pysnmp.proto.agent import cmdrsp
 import asyncio, psutil, time, smtplib
-
+from email.mime.text import MIMEText
+from pysnmp.hlapi.asyncio import *
 
 # --- Configuración SNMP Engine ---
 snmpEngine = SnmpEngine()
 
 config.addV1System(snmpEngine, 'ro-user', 'public')
 config.addV1System(snmpEngine, 'rw-user', 'private')
-
 config.addVacmUser(snmpEngine, 2, 'ro-user', 'noAuthNoPriv', (1,3,6,1), (), ())
 config.addVacmUser(snmpEngine, 2, 'rw-user', 'noAuthNoPriv', (1,3,6,1), (1,3,6,1), ())
 
@@ -24,7 +22,6 @@ with open('mib_state.json', 'r') as f:
     json_data = json.load(f)
 scalars = {}
 for name, props in json_data['scalars'].items():
-    # Convierte OID string a tuple de ints
     props['oid'] = tuple(int(x) for x in props['oid'].split('.'))
     scalars[name] = props
 sorted_oids = sorted([props['oid'] for props in scalars.values()])
@@ -98,7 +95,6 @@ class Store:
         out_json = {'baseoid': json_data['baseoid'], 'scalars': {}}
         for n, props in scalars.items():
             dic = {k: v for k,v in props.items()}
-            # Convierte oid a string
             dic['oid'] = '.'.join(str(x) for x in props['oid'])
             out_json['scalars'][n] = dic
         with open('mib_state.json', 'w') as f:
@@ -160,8 +156,73 @@ class JsonSet(cmdrsp.SetCommandResponder):
         v2c.apiPDU.setVarBinds(rspPDU, rsp)
         self.sendPdu(snmpEngine, stateReference, rspPDU)
 
+# --- Configuración EMAIL ---
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 587
+SENDER_EMAIL = "icemanlabel@gmail.com"
+SENDER_PASS = "kjjn qwac wxqf fbog"
+
+def send_email_alert(cpu, threshold, to_addr):
+    subject = f"🚨 Alerta CPU: {cpu}% supera umbral ({threshold}%)"
+    body = f"El agente SNMP detectó CPU={cpu}%, threshold={threshold}%."
+    msg = MIMEText(body)
+    msg["From"] = SENDER_EMAIL
+    msg["To"] = to_addr
+    msg["Subject"] = subject
+
+    try:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SENDER_EMAIL, SENDER_PASS)
+            server.send_message(msg)
+        print(f"📧 Email enviado a {to_addr}")
+    except Exception as e:
+        print(f"❌ Error email: {e}")
+
+async def send_trap(snmpEngine, cpu, threshold, manager, managerEmail):
+    errorIndication = await sendNotification(
+        snmpEngine,
+        CommunityData('private'),
+        UdpTransportTarget(('127.0.0.1', 162)),
+        ContextData(),
+        'trap',
+        [
+            # Modifica la OID de notificación si es diferente en tu MIB
+            ObjectType(ObjectIdentity('1.3.6.1.4.1.28308.1.2.0.1')),
+            ObjectType(ObjectIdentity('1.3.6.1.4.1.28308.1.1.3.0'), Integer(cpu)),   # cpuUsage
+            ObjectType(ObjectIdentity('1.3.6.1.4.1.28308.1.1.4.0'), Integer(threshold)), # cpuThreshold
+            ObjectType(ObjectIdentity('1.3.6.1.4.1.28308.1.1.1.0'), OctetString(manager)),
+            ObjectType(ObjectIdentity('1.3.6.1.4.1.28308.1.1.2.0'), OctetString(managerEmail))
+        ]
+    )
+    if errorIndication:
+        print(f"❌ Error enviando trap: {errorIndication}")
+    else:
+        print(f"🚨 Trap SNMP enviada (CPU={cpu}, Threshold={threshold})")
+
+async def cpusampler(store, snmpEngine):
+    psutil.cpu_percent(interval=None)
+    lastover = False
+    while True:
+        await asyncio.sleep(5)
+        cpu = round(psutil.cpu_percent(interval=None))
+        cpu = max(0, min(100, cpu))
+        store.commit_set(scalars['cpuUsage']['oid'], Integer(cpu))
+        threshold = int(scalars['cpuThreshold']['value'])
+        manager = scalars['manager']['value']
+        managerEmail = scalars['managerEmail']['value']
+
+        over = cpu > threshold
+        if over and not lastover:
+            await send_trap(snmpEngine, cpu, threshold, manager, managerEmail)
+            send_email_alert(cpu, threshold, managerEmail)
+        lastover = over
+
 def main():
     print("✅ Mini SNMP Agent está listo y cargado con mib_state.json")
+    loop = asyncio.get_event_loop()
+    loop.create_task(cpusampler(store, snmpEngine))
+    loop.run_forever()
 
 if __name__ == "__main__":
     main()
