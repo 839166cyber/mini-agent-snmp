@@ -7,6 +7,8 @@ from pysnmp.carrier.asyncore.dgram import udp
 from pysnmp.proto.rfc1902 import NoSuchObject, EndOfMibView, OctetString, Integer
 from pysnmp.proto.api import v2c
 from pysnmp.proto.agent import cmdrsp
+import asyncio, psutil, time, smtplib
+
 
 # --- Configuración SNMP Engine ---
 snmpEngine = SnmpEngine()
