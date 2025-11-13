@@ -12,7 +12,7 @@ myAgentMib MODULE-IDENTITY
     LAST-UPDATED "202511061200Z"
     ORGANIZATION "Zaragoza Network Management Research Group"
     CONTACT-INFO
-        "Email: alesanco@unizar.es"
+        "Email: 740540.practicas@gmail.com"
     DESCRIPTION
         "Mini SNMP Agent MIB. Exposes manager info and CPU usage/threshold,
          and sends a notification if the threshold is exceeded."
