@@ -1,5 +1,6 @@
 """
 Mini SNMP Agent - Python 3.13 + PySNMP 7.1.22
+
 - Async CPU monitor (scheduled on PySNMP loop)
 - GET/GETNEXT/SET via custom responders backed by JSON store
 - Gmail SMTP email notification on threshold crossing
@@ -24,7 +25,7 @@ from pysnmp.proto.api import v2c
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# Types
+# Types (respetando tu aliasado en línea 28)
 OctetString = rfc1902.OctetString
 Integer = rfc1902.Integer32
 ObjectIdentifier = rfc1902.ObjectIdentifier
@@ -34,15 +35,17 @@ ObjectIdentifier = rfc1902.ObjectIdentifier
 # =========================
 SMTP_SERVER = 'smtp.gmail.com'
 SMTP_PORT = 587
+
 # CHANGE THESE:
 SENDER_EMAIL = '740540.practicas@gmail.com'  # ← PUT YOUR GMAIL ADDRESS HERE
-SENDER_PASS = 'hcpq sfgt dojo zwbx'            # Gmail App Password (16 chars)
+SENDER_PASS = 'hcpq sfgt dojo zwbx'          # Gmail App Password (16 chars)
 
 # =========================
 # Files and OIDs
 # =========================
 STATE_FILE = 'mib_state.json'
 OIDS_FILE = 'myagent_oids.json'
+
 ENTERPRISE_OID = 28308  # Zaragoza Network Management Research Group
 
 DEFAULT_OIDS = {
@@ -88,6 +91,7 @@ default_state = {
     "cpuUsage": 0,
     "cpuThreshold": 80
 }
+
 check_and_create_json(STATE_FILE, default_state)
 check_and_create_json(OIDS_FILE, DEFAULT_OIDS)
 
@@ -105,21 +109,27 @@ class JsonStore:
     def __init__(self, fname):
         self.fname = fname
         self.load()
+
     def load(self):
         with open(self.fname) as f:
             self.data = json.load(f)
+
     def save(self):
         with open(self.fname, 'w') as f:
             json.dump(self.data, f, indent=2)
 
+    # FIX: conversión robusta usando alias Integer (Integer32) y OctetString
     def _to_snmp_type(self, oid_tuple, value):
         name = NAME_MAP[oid_tuple]
         prop = OID_PROPS[name]
-        if value is None or value == '':
-            return OctetString('') if prop["type"] == "DisplayString" else Integer(0)
         if prop["type"] == "DisplayString":
-            return OctetString(value)
-        return Integer(value)
+            # Para None o '', devolver OctetString vacía
+            return OctetString("" if value is None else str(value))
+        # Integer32
+        try:
+            return Integer(0 if value is None else int(value))
+        except Exception:
+            return Integer(0)
 
     def get_exact(self, oid_tuple):
         if oid_tuple in NAME_MAP:
@@ -129,6 +139,7 @@ class JsonStore:
         return False, None
 
     def get_next(self, oid_tuple):
+        # Siguiente estrictamente mayor
         idx = 0
         while idx < len(SORTED_OIDS) and SORTED_OIDS[idx] <= oid_tuple:
             idx += 1
@@ -138,38 +149,46 @@ class JsonStore:
             return True, next_oid, val
         return False, None, None
 
+    # FIX: validación SET con tipos de v2c y códigos de error correctos
     def validate_set(self, oid_tuple, snmp_val, community_name="public"):
+        # 6=noAccess, 7=wrongType, 10=wrongValue, 17=notWritable
         if oid_tuple not in NAME_MAP:
             return 6, None  # noAccess
         name = NAME_MAP[oid_tuple]
         prop = OID_PROPS[name]
         if prop["access"] != "read-write":
             return 17, None  # notWritable
+        # Política: comunidad 'public' solo lectura
         if community_name == "public":
             return 6, None  # noAccess
 
         t = prop["type"]
-        if t == "DisplayString" and not isinstance(snmp_val, OctetString):
-            return 7, None  # wrongType
-        if t == "Integer32" and not isinstance(snmp_val, Integer):
-            return 7, None
-
         if t == "DisplayString":
+            if not isinstance(snmp_val, v2c.OctetString):
+                return 7, None  # wrongType
             try:
                 s = bytes(snmp_val).decode('utf-8', 'ignore')
             except Exception:
-                return 10, None
-            if not (prop["min"] <= len(s) <= prop["max"]):
                 return 10, None  # wrongValue
+            if not (prop["min"] <= len(s) <= prop["max"]):
+                return 10, None
+            return 0, None
+
         if t == "Integer32":
+            # En PDU de SET, Integer32 llega como v2c.Integer
+            if not isinstance(snmp_val, v2c.Integer):
+                return 7, None  # wrongType
             try:
                 i = int(snmp_val)
             except Exception:
-                return 10, None
+                return 10, None  # wrongValue
             if not (prop["min"] <= i <= prop["max"]):
                 return 10, None
-        return 0, None
+            return 0, None
 
+        return 7, None  # wrongType genérico
+
+    # FIX: commit usando bytes(...) para strings e int(...) para enteros
     def commit_set(self, oid_tuple, snmp_val):
         name = NAME_MAP.get(oid_tuple)
         if not name:
@@ -189,15 +208,17 @@ store = JsonStore(STATE_FILE)
 # =========================
 class JsonGet(cmdrsp.GetCommandResponder):
     def handleMgmtOperation(self, snmpEngine, stateReference, contextName, PDU, acInfo):
-        print(f"DEBUG: GET request received for PDU: {PDU}")
         reqVarBinds = v2c.apiPDU.getVarBinds(PDU)
         rspVarBinds = []
         for oid, _ in reqVarBinds:
             found, value = store.get_exact(tuple(oid))
+            # FIX: devolver instancia de NoSuchObject() si no existe
             if not found:
-                value = rfc1905.noSuchObject
+                value = rfc1905.NoSuchObject()
+            print('SNMP GET solicitando:', tuple(oid))
             rspVarBinds.append((oid, value))
-        rspPDU = v2c.apiPDU.getResponse(PDU)
+
+        rspPDU = v2c.apiPDU.getResponsePDU(PDU)
         v2c.apiPDU.setErrorStatus(rspPDU, 0)
         v2c.apiPDU.setErrorIndex(rspPDU, 0)
         v2c.apiPDU.setVarBinds(rspPDU, rspVarBinds)
@@ -212,8 +233,9 @@ class JsonGetNext(cmdrsp.NextCommandResponder):
             if ok:
                 rspVarBinds.append((ObjectIdentifier(next_oid), val))
             else:
-                rspVarBinds.append((oid, rfc1905.endOfMibView))
-        rspPDU = v2c.apiPDU.getResponse(PDU)
+                # FIX: instancia EndOfMibView()
+                rspVarBinds.append((oid, rfc1905.EndOfMibView()))
+        rspPDU = v2c.apiPDU.getResponsePDU(PDU)
         v2c.apiPDU.setErrorStatus(rspPDU, 0)
         v2c.apiPDU.setErrorIndex(rspPDU, 0)
         v2c.apiPDU.setVarBinds(rspPDU, rspVarBinds)
@@ -222,6 +244,8 @@ class JsonGetNext(cmdrsp.NextCommandResponder):
 class JsonSet(cmdrsp.SetCommandResponder):
     def handleMgmtOperation(self, snmpEngine, stateReference, contextName, PDU, acInfo):
         reqVarBinds = v2c.apiPDU.getVarBinds(PDU)
+
+        # Mejor esfuerzo para comunidad
         community = "public"
         if acInfo and hasattr(acInfo, 'get'):
             community = acInfo.get("communityName", "public")
@@ -230,10 +254,11 @@ class JsonSet(cmdrsp.SetCommandResponder):
         for idx, (oid, val) in enumerate(reqVarBinds, start=1):
             errStatus, _ = store.validate_set(tuple(oid), val, community)
             if errStatus != 0:
-                rspPDU = v2c.apiPDU.getResponse(PDU)
+                rspPDU = v2c.apiPDU.getResponsePDU(PDU)
                 v2c.apiPDU.setErrorStatus(rspPDU, errStatus)
                 v2c.apiPDU.setErrorIndex(rspPDU, idx)
-                v2c.apiPDU.setVarBinds(rspPDU, reqVarBinds)  # echo original
+                # Eco original (requerido por SNMP)
+                v2c.apiPDU.setVarBinds(rspPDU, reqVarBinds)
                 self.sendPdu(snmpEngine, stateReference, rspPDU)
                 return
 
@@ -246,9 +271,10 @@ class JsonSet(cmdrsp.SetCommandResponder):
         for oid, _ in reqVarBinds:
             found, value = store.get_exact(tuple(oid))
             if not found:
-                value = rfc1905.noSuchObject
+                value = rfc1905.NoSuchObject()
             rspVarBinds.append((oid, value))
-        rspPDU = v2c.apiPDU.getResponse(PDU)
+
+        rspPDU = v2c.apiPDU.getResponsePDU(PDU)
         v2c.apiPDU.setErrorStatus(rspPDU, 0)
         v2c.apiPDU.setErrorIndex(rspPDU, 0)
         v2c.apiPDU.setVarBinds(rspPDU, rspVarBinds)
@@ -259,29 +285,25 @@ class JsonSet(cmdrsp.SetCommandResponder):
 # =========================
 def send_email_alert(cpu, threshold, to_addr):
     if not to_addr or '@' not in to_addr:
-        print(f"⚠️  Invalid email: {to_addr}")
+        print(f"⚠️ Invalid email: {to_addr}")
         return
     if SENDER_EMAIL == 'your-email@gmail.com' or SENDER_PASS.startswith('xxxx'):
-        print("⚠️  Gmail credentials not configured. Edit SENDER_EMAIL/SENDER_PASS.")
+        print("⚠️ Gmail credentials not configured. Edit SENDER_EMAIL/SENDER_PASS.")
         return
 
     subject = f"🚨 CPU Alert: {cpu}% exceeds {threshold}%"
     body = f"""CPU Usage Alert - SNMP Agent
-
 Current CPU Usage: {cpu}%
 Configured Threshold: {threshold}%
-
 Manager: {store.data.get('manager', 'Unknown')}
 Email: {to_addr}
 Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}
-
 This is an automated notification.
 """
     msg = MIMEText(body)
     msg["From"] = SENDER_EMAIL
     msg["To"] = to_addr
     msg["Subject"] = subject
-
     try:
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=10) as server:
             server.ehlo()
@@ -289,7 +311,7 @@ This is an automated notification.
             server.ehlo()
             server.login(SENDER_EMAIL, SENDER_PASS)
             server.send_message(msg)
-        print(f"✅ Email sent to {to_addr}")
+            print(f"✅ Email sent to {to_addr}")
     except smtplib.SMTPAuthenticationError:
         print("❌ Gmail authentication failed (check App Password & 2FA).")
     except Exception as e:
@@ -309,12 +331,10 @@ async def cpu_monitor():
         store.data["cpuUsage"] = cpu
         store.save()
         threshold = int(store.data.get("cpuThreshold", 80))
-        manager = str(store.data.get("manager", "Admin"))
         managerEmail = str(store.data.get("managerEmail", "admin@example.com"))
-
         over = cpu > threshold
         if over and not last_over:
-            print(f"\n⚠️  CPU threshold exceeded: Current CPU usage:{cpu}%, current threshold:{threshold}%")
+            print(f"\n⚠️ CPU threshold exceeded: Current CPU usage:{cpu}%, current threshold:{threshold}%")
             send_email_alert(cpu, threshold, managerEmail)
         last_over = over
 
@@ -324,22 +344,26 @@ async def cpu_monitor():
 snmpEngine = engine.SnmpEngine()
 snmpContext = context.SnmpContext(snmpEngine)
 
+host = '127.0.0.1'
+port = 1161  # Cambia a 1161 si tienes problemas de permisos en Windows
 config.addTransport(
     snmpEngine,
     udp.domainName,
-    udp.UdpTransport().openServerMode(('127.0.0.1', 161))
+    udp.UdpTransport().openServerMode((host, port))
 )
 
-config.addV1System(snmpEngine, 'ro-user', 'public')
-config.addV1System(snmpEngine, 'rw-user', 'private')
+# FIX VACM: alinear securityName entre addV1System y addVacmUser
+config.addV1System(snmpEngine, 'public-area', 'public')
+config.addV1System(snmpEngine, 'private-area', 'private')
 
+# v2c securityModel=2; se usan los mismos securityName de arriba
 config.addVacmUser(
-    snmpEngine, 2, 'ro-user', 'noAuthNoPriv',
-    readSubTree=(1, 3, 6, 1),
-    writeSubTree=()
+    snmpEngine, 2, 'public-area', 'noAuthNoPriv',
+    readSubTree=(1,3,6,1),
+    writeSubTree=(1,3,6,1)
 )
 config.addVacmUser(
-    snmpEngine, 2, 'rw-user', 'noAuthNoPriv',
+    snmpEngine, 2, 'private-area', 'noAuthNoPriv',
     readSubTree=(1, 3, 6, 1),
     writeSubTree=(1, 3, 6, 1)
 )
@@ -350,25 +374,29 @@ JsonGetNext(snmpEngine, snmpContext)
 JsonSet(snmpEngine, snmpContext)
 print("RESPONDERS REGISTERED")
 
-
-
 # =========================
 # Main using PySNMP’s loop
 # =========================
 def main():
     print("\n" + "="*60)
-    print("  Mini SNMP Agent - Python 3.13 + PySNMP 7.1.22")
+    print(" Mini SNMP Agent - Python 3.13 + PySNMP 7.1.22")
     print("="*60)
-    print(f"  Enterprise OID: 1.3.6.1.4.1.{ENTERPRISE_OID}")
-    print(f"  Listening on:   127.0.0.1:161")
-    print(f"  Email via:      {SMTP_SERVER}")
+    print(f" Enterprise OID: 1.3.6.1.4.1.{ENTERPRISE_OID}")
+    print(f" Listening on: {host}:{port}")
+    print(f" Email via: {SMTP_SERVER}")
+    print('OIDs gestionados:')
+    for oid in SORTED_OIDS:
+        print(oid)
     print("="*60 + "\n")
+
+    
+
+
     if SENDER_EMAIL == 'your-email@gmail.com' or SENDER_PASS.startswith('xxxx'):
-        print("⚠️  Gmail not configured. Edit SENDER_EMAIL / SENDER_PASS.\n")
+        print("⚠️ Gmail not configured. Edit SENDER_EMAIL / SENDER_PASS.\n")
 
     loop = snmpEngine.transport_dispatcher.loop
     loop.create_task(cpu_monitor())
-
     snmpEngine.transport_dispatcher.job_started(1)
     try:
         snmpEngine.transport_dispatcher.run_dispatcher()

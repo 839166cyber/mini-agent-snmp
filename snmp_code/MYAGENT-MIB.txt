@@ -16,7 +16,7 @@ myAgentMib MODULE-IDENTITY
     DESCRIPTION
         "Mini SNMP Agent MIB. Exposes manager info and CPU usage/threshold,
          and sends a notification if the threshold is exceeded."
-    ::= { enterprises 28308 1 }
+    ::= { enterprises 28308 }
 
 -- ==========================================================
 --               MIB ROOTS
@@ -63,7 +63,7 @@ cpuThreshold OBJECT-TYPE
 -- ==========================================================
 
 cpuOverThresholdNotification NOTIFICATION-TYPE
-    OBJECTS { cpuUsage, cpuThreshold, manager, managerEmail }
+    OBJECTS { cpuUsage, cpuThreshold, manager, managerEmail } -- en el enunciado pide cpuUsage, cpuThreshold, mangerEmail, DateAndTime
     STATUS  current
     DESCRIPTION
         "Sent when cpuUsage exceeds cpuThreshold."
