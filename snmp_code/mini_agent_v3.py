@@ -118,14 +118,11 @@ class JsonStore:
         with open(self.fname, 'w') as f:
             json.dump(self.data, f, indent=2)
 
-    # FIX: conversión robusta usando alias Integer (Integer32) y OctetString
     def _to_snmp_type(self, oid_tuple, value):
         name = NAME_MAP[oid_tuple]
         prop = OID_PROPS[name]
         if prop["type"] == "DisplayString":
-            # Para None o '', devolver OctetString vacía
             return OctetString("" if value is None else str(value))
-        # Integer32
         try:
             return Integer(0 if value is None else int(value))
         except Exception:
@@ -139,7 +136,6 @@ class JsonStore:
         return False, None
 
     def get_next(self, oid_tuple):
-        # Siguiente estrictamente mayor
         idx = 0
         while idx < len(SORTED_OIDS) and SORTED_OIDS[idx] <= oid_tuple:
             idx += 1
@@ -149,46 +145,36 @@ class JsonStore:
             return True, next_oid, val
         return False, None, None
 
-    # FIX: validación SET con tipos de v2c y códigos de error correctos
-    def validate_set(self, oid_tuple, snmp_val, community_name="public"):
+    def validate_set(self, oid_tuple, snmp_val, _community_unused='public'):
         # 6=noAccess, 7=wrongType, 10=wrongValue, 17=notWritable
         if oid_tuple not in NAME_MAP:
-            return 6, None  # noAccess
+            return 6, None
         name = NAME_MAP[oid_tuple]
         prop = OID_PROPS[name]
         if prop["access"] != "read-write":
-            return 17, None  # notWritable
-        # Política: comunidad 'public' solo lectura
-        if community_name == "public":
-            return 6, None  # noAccess
+            return 17, None
 
-        t = prop["type"]
-        if t == "DisplayString":
+        if prop["type"] == "DisplayString":
             if not isinstance(snmp_val, v2c.OctetString):
-                return 7, None  # wrongType
-            try:
-                s = bytes(snmp_val).decode('utf-8', 'ignore')
-            except Exception:
-                return 10, None  # wrongValue
+                return 7, None
+            s = bytes(snmp_val).decode('utf-8', 'ignore')
             if not (prop["min"] <= len(s) <= prop["max"]):
                 return 10, None
             return 0, None
 
-        if t == "Integer32":
-            # En PDU de SET, Integer32 llega como v2c.Integer
+        if prop["type"] == "Integer32":
             if not isinstance(snmp_val, v2c.Integer):
-                return 7, None  # wrongType
+                return 7, None
             try:
                 i = int(snmp_val)
             except Exception:
-                return 10, None  # wrongValue
+                return 10, None
             if not (prop["min"] <= i <= prop["max"]):
                 return 10, None
             return 0, None
 
-        return 7, None  # wrongType genérico
+        return 7, None
 
-    # FIX: commit usando bytes(...) para strings e int(...) para enteros
     def commit_set(self, oid_tuple, snmp_val):
         name = NAME_MAP.get(oid_tuple)
         if not name:
@@ -201,23 +187,23 @@ class JsonStore:
         self.save()
         return True
 
+
 store = JsonStore(STATE_FILE)
 
 # =========================
 # Command Responders (PySNMP 7.x signatures)
 # =========================
+
 class JsonGet(cmdrsp.GetCommandResponder):
-    def handleMgmtOperation(self, snmpEngine, stateReference, contextName, PDU, acInfo):
+    def handleMgmtOperation(self, snmpEngine, stateReference, contextName, PDU):
+        # GET exact
+        print(f"🔍 GET request recibido - Context: {contextName}") # prints para debug
         reqVarBinds = v2c.apiPDU.getVarBinds(PDU)
+        print(f"🔍 VarBinds solicitados: {reqVarBinds}")
         rspVarBinds = []
         for oid, _ in reqVarBinds:
             found, value = store.get_exact(tuple(oid))
-            # FIX: devolver instancia de NoSuchObject() si no existe
-            if not found:
-                value = rfc1905.NoSuchObject()
-            print('SNMP GET solicitando:', tuple(oid))
-            rspVarBinds.append((oid, value))
-
+            rspVarBinds.append((oid, value if found else rfc1905.NoSuchObject()))
         rspPDU = v2c.apiPDU.getResponsePDU(PDU)
         v2c.apiPDU.setErrorStatus(rspPDU, 0)
         v2c.apiPDU.setErrorIndex(rspPDU, 0)
@@ -225,15 +211,17 @@ class JsonGet(cmdrsp.GetCommandResponder):
         self.sendPdu(snmpEngine, stateReference, rspPDU)
 
 class JsonGetNext(cmdrsp.NextCommandResponder):
-    def handleMgmtOperation(self, snmpEngine, stateReference, contextName, PDU, acInfo):
+    def handleMgmtOperation(self, snmpEngine, stateReference, contextName, PDU):
+        # GETNEXT (lexicographic successor)
+        print(f"🔍 GETNEXT request recibido - Context: {contextName}") # prints para debug
         reqVarBinds = v2c.apiPDU.getVarBinds(PDU)
+        print(f"🔍 VarBinds solicitados: {reqVarBinds}")
         rspVarBinds = []
         for oid, _ in reqVarBinds:
             ok, next_oid, val = store.get_next(tuple(oid))
             if ok:
                 rspVarBinds.append((ObjectIdentifier(next_oid), val))
             else:
-                # FIX: instancia EndOfMibView()
                 rspVarBinds.append((oid, rfc1905.EndOfMibView()))
         rspPDU = v2c.apiPDU.getResponsePDU(PDU)
         v2c.apiPDU.setErrorStatus(rspPDU, 0)
@@ -242,43 +230,57 @@ class JsonGetNext(cmdrsp.NextCommandResponder):
         self.sendPdu(snmpEngine, stateReference, rspPDU)
 
 class JsonSet(cmdrsp.SetCommandResponder):
-    def handleMgmtOperation(self, snmpEngine, stateReference, contextName, PDU, acInfo):
+    def handleMgmtOperation(self, snmpEngine, stateReference, contextName, PDU):
+        # SET with VACM-based access (no acInfo)
+        print(f"🔍 SET request recibido - Context: {contextName}") # prints para debug
         reqVarBinds = v2c.apiPDU.getVarBinds(PDU)
+        print(f"🔍 VarBinds para SET: {reqVarBinds}")
 
-        # Mejor esfuerzo para comunidad
-        community = "public"
-        if acInfo and hasattr(acInfo, 'get'):
-            community = acInfo.get("communityName", "public")
+        # Intenta deducir securityName de observer (opcional)
+        sec_name = None
+        try:
+            ctx_list = snmpEngine.observer.getExecutionContext('rfc3412.receiveMessage:request')
+            if ctx_list:
+                (_, _, _, securityName, _, _, _) = ctx_list[0]
+                sec_name = str(securityName)
+        except Exception:
+            pass
 
-        # Phase 1: validate
+        # Política simple: si no es 'private', tratar como RO
+        is_rw = (sec_name == 'private')
+
+        # Fase 1: validar
         for idx, (oid, val) in enumerate(reqVarBinds, start=1):
-            errStatus, _ = store.validate_set(tuple(oid), val, community)
+            errStatus = 0
+            if not is_rw:
+                errStatus = 6  # noAccess (RO)
+            else:
+                errStatus, _ = store.validate_set(tuple(oid), val, 'private')
+
             if errStatus != 0:
                 rspPDU = v2c.apiPDU.getResponsePDU(PDU)
                 v2c.apiPDU.setErrorStatus(rspPDU, errStatus)
                 v2c.apiPDU.setErrorIndex(rspPDU, idx)
-                # Eco original (requerido por SNMP)
-                v2c.apiPDU.setVarBinds(rspPDU, reqVarBinds)
+                v2c.apiPDU.setVarBinds(rspPDU, reqVarBinds)  # Eco
                 self.sendPdu(snmpEngine, stateReference, rspPDU)
                 return
 
-        # Phase 2: commit
+        # Fase 2: commit
         for oid, val in reqVarBinds:
             store.commit_set(tuple(oid), val)
 
-        # Respond with post-SET values
+        # Responder con valores actuales
         rspVarBinds = []
         for oid, _ in reqVarBinds:
             found, value = store.get_exact(tuple(oid))
-            if not found:
-                value = rfc1905.NoSuchObject()
-            rspVarBinds.append((oid, value))
+            rspVarBinds.append((oid, value if found else rfc1905.NoSuchObject()))
 
         rspPDU = v2c.apiPDU.getResponsePDU(PDU)
         v2c.apiPDU.setErrorStatus(rspPDU, 0)
         v2c.apiPDU.setErrorIndex(rspPDU, 0)
         v2c.apiPDU.setVarBinds(rspPDU, rspVarBinds)
         self.sendPdu(snmpEngine, stateReference, rspPDU)
+
 
 # =========================
 # Email notification
@@ -353,20 +355,15 @@ config.addTransport(
 )
 
 # FIX VACM: alinear securityName entre addV1System y addVacmUser
-config.addV1System(snmpEngine, 'public-area', 'public')
-config.addV1System(snmpEngine, 'private-area', 'private')
+config.addV1System(snmpEngine, 'public', 'public')
+config.addV1System(snmpEngine, 'private', 'private')
 
 # v2c securityModel=2; se usan los mismos securityName de arriba
-config.addVacmUser(
-    snmpEngine, 2, 'public-area', 'noAuthNoPriv',
-    readSubTree=(1,3,6,1),
-    writeSubTree=(1,3,6,1)
-)
-config.addVacmUser(
-    snmpEngine, 2, 'private-area', 'noAuthNoPriv',
-    readSubTree=(1, 3, 6, 1),
-    writeSubTree=(1, 3, 6, 1)
-)
+config.addVacmUser(snmpEngine, 2, 'public', 'noAuthNoPriv',
+                   readSubTree=(1,3,6,1), writeSubTree=())
+
+config.addVacmUser(snmpEngine, 2, 'private', 'noAuthNoPriv',
+                   readSubTree=(1,3,6,1), writeSubTree=(1,3,6,1))
 
 # Register responders
 JsonGet(snmpEngine, snmpContext)
