@@ -97,7 +97,7 @@ default_state = {
     "manager": "Admin",
     "managerEmail": "740540@unizar.es",
     "cpuUsage": 0,
-    "cpuThreshold": 10
+    "cpuThreshold": 80
 }
 
 check_and_create_json(STATE_FILE, default_state)
