@@ -1,0 +1,47 @@
+Buscar procesos udp en powershell
+	netstat -ano | findstr :1161
+	Stop-Process -Id 6636 -Force
+	
+GET basico
+	# sistema
+	snmpget -v2c -c public 127.0.0.1:1161 1.3.6.1.2.1.1.1.0
+	
+
+	# manager (DisplayString)
+	snmpget -v2c -c public 127.0.0.1:1161 1.3.6.1.4.1.28308.1.1.0
+	# cpuUsage (Integer32)
+	snmpget -v2c -c public 127.0.0.1 1.3.6.1.4.1.28308.1.3.0
+	
+GETNEXT
+	# Start just before your subtree’s first instance (.1.0)
+	snmpgetnext -v2c -c public 127.0.0.1:1161 1.3.6.1.4.1.28308.1.1
+	
+SET
+	# Change manager and email (strings)
+	snmpset -v2c -c private 127.0.0.1 1.3.6.1.4.1.28308.1.1.0 s "Alice"
+	snmpset -v2c -c private 127.0.0.1 1.3.6.1.4.1.28308.1.2.0 s "alice@example.com"
+
+	# Change threshold (int)
+	snmpset -v2c -c private 127.0.0.1 1.3.6.1.4.1.28308.1.4.0 i 75
+	
+Negative tests
+	RO object on SET
+		snmpset -v2c -c private 127.0.0.1 1.3.6.1.4.1.28308.1.4.0 i 10
+	Wrong type
+		snmpset -v2c -c private 127.0.0.1 1.3.6.1.3.28308.1.4.0 s "not-an-int"
+		
+Persistance
+	snmpset -v2c -c private 127.0.0.1 1.3.6.1.4.1.28308.1.1.0 i "Bob"
+	restart
+	snmpget -v2c -c public 127.0.0.1 1.3.6.1.4.1.28308.1.1.0
+	
+CPU sampler
+	# Watch cpuUsage changing (~every 5s)
+	watch -n1 'snmpget -v2c -c public 127.0.0.1 OID’
+	
+	
+Walk
+	snmpwalk -v2c -c public 127.0.0.1 1.3.6.1.4.1
+
+Captura de traps
+	sudo tcpdump -i lo udp port 162 -vv -X (en una ventana de comandos diferente)
