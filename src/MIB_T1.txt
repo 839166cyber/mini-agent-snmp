@@ -67,7 +67,7 @@ cpuOverThresholdNotification NOTIFICATION-TYPE
     STATUS  current
     DESCRIPTION
         "Sent when cpuUsage exceeds cpuThreshold."
-    ::= { cpuNotifications 0 1 }   -- note the '0' for SMIv1/SMIv2 compatibility
+    ::= { cpuNotifications 1 }
 
 -- ==========================================================
 --               CONFORMANCE (optional but recommended)
