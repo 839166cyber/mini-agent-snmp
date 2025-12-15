@@ -47,12 +47,12 @@ snmpset -v2c -c private 127.0.0.1:16100 1.3.6.1.3.28308.1.4.0 i 85
 
 ### 3. **Test automatizado**
 ```bash
-sudo tcpdump -i lo udp port 162 -vv -X
+python test.py
 ```
 
 ### 4. **Captura de traps**
 ```bash
-python test.py
+sudo tcpdump -i lo udp port 162 -vv -X
 ```
 
 ## 🛡️ Control de Acceso VACM
