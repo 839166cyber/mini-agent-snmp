@@ -74,9 +74,10 @@ main() → asyncio loop
 
 ## 📁 Archivos
 ```
-mini-snmp/
-├── mini_agente_copy.py
+src/
+├── mini_agente.py
 ├── test.py
-├── mib_state.json (auto)
-└── README.md
+└── mib_state.json (auto)
+comandos.txt
+README.md
 ```
