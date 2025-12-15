@@ -52,7 +52,7 @@ python test.py
 
 ### 4. **Captura de traps**
 ```bash
-sudo tcpdump -i lo udp port 162 -vv -X
+sudo tcpdump -i lo -nn udp port 162 -v
 ```
 
 ## 🛡️ Control de Acceso VACM
